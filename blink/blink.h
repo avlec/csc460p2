@@ -14,9 +14,6 @@
 #define NoOperation()		   asm volatile ("nop"::)
 
 void blink(int bit);
-void led_init();
-void enable_LED(int bit);
-void disable_LED(int bit);
-void disable_LEDs();
+
 
 #endif /* BLINK_H_ */

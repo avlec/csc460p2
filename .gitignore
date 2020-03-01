@@ -1,2 +1,4 @@
-cmake-*
+cmake-build-debug
 build*
+.idea
+.DS_Store

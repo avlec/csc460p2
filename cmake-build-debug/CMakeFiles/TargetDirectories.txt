@@ -1,5 +1,0 @@
-/Users/avlec/Downloads/P2_WRR/P2_WRR/cmake-build-debug/CMakeFiles/flash.dir
-/Users/avlec/Downloads/P2_WRR/P2_WRR/cmake-build-debug/CMakeFiles/hex.dir
-/Users/avlec/Downloads/P2_WRR/P2_WRR/cmake-build-debug/CMakeFiles/rebuild_cache.dir
-/Users/avlec/Downloads/P2_WRR/P2_WRR/cmake-build-debug/CMakeFiles/edit_cache.dir
-/Users/avlec/Downloads/P2_WRR/P2_WRR/cmake-build-debug/CMakeFiles/cswitchexample.dir

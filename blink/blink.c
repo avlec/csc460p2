@@ -19,20 +19,3 @@ void blink(int bit) {
 	PORTA &= (0<< bit); // OFF
 	Enable_Interrupt();
 }
-
-void led_init() {
-	// set PORTA as output
-	DDRA = 0x0FF;
-}
-
-void enable_LED(int bit) {
-	PORTA |= (1<<bit);	// ON
-}
-
-void disable_LED(int bit) {
-	PORTA &= (0<< bit); // OFF
-}
-
-void disable_LEDs() {
-	PORTA = 0;
-}

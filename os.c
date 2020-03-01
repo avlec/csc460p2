@@ -32,9 +32,9 @@
 
 // Declare a_main - this is going to be the first task created when we
 // run our RTOS - will come from either remote or base.c
-extern void a_main();
+extern void a_main(void);
 
-typedef void (*voidfuncptr) (void);      /* pointer to void f(void) */
+typedef void (*void_func_ptr) (void);      /* pointer to void f(void) */
 
 
 /*===========
@@ -56,8 +56,8 @@ typedef void (*voidfuncptr) (void);      /* pointer to void f(void) */
   * again, but Cp is not running any more.
   * (See file "switch.S" for details.)
   */
-extern void CSwitch();
-extern void Exit_Kernel();    /* this is the same as CSwitch() */
+extern void CSwitch(void);
+extern void Exit_Kernel(void);    /* this is the same as CSwitch() */
 
 /* Prototype */
 void Task_Terminate(void);
@@ -113,6 +113,7 @@ typedef enum priorities
 {
   SYSTEM = 0,
   TIME,
+  WRR,
   RR,
   IDLE_TASK
 } PRIORITIES;
@@ -130,7 +131,7 @@ typedef struct ProcessDescriptor
    volatile unsigned char *sp;   /* stack pointer into the "workSpace" */
    unsigned char workSpace[WORKSPACE];
    PROCESS_STATES state;
-   voidfuncptr  code;   /* function to be executed as a task */
+   void_func_ptr  code;   /* function to be executed as a task */
    KERNEL_REQUEST_TYPE request;
    int arg;
    int kernel_response;
@@ -144,7 +145,6 @@ typedef struct ProcessDescriptor
    TICK next_schedule;
    TICK executed_ticks;
    TICK remaining_ticks;
-
 
    PRIORITIES py_arg;
    TICK period_arg;
@@ -169,6 +169,8 @@ typedef struct ReadyQueue
 static PD Process[MAXPROCESS];
 
 // The ready queues - time based tasks can only ever have one task queued
+RQ ReadyQWRR = { .count = 0, .front = 0, .end = 0};
+
 RQ ReadyQRR = {.count = 0, .front = 0, .end = 0};
 
 RQ ReadyQTime = {.count = 0, .front = 0, .end = 0};
@@ -287,6 +289,9 @@ void setReady(volatile PD* p)
     case IDLE_TASK:
       enqueue(&ReadyQIdle, p);
 	  break;
+    case WRR:
+        enqueue(&ReadyQWRR, p);
+        break;
     case RR:
       enqueue(&ReadyQRR, p);
       break;
@@ -301,9 +306,13 @@ void setReady(volatile PD* p)
     case SYSTEM:
       enqueue(&ReadyQSystem, p);
       break;
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "UnreachableCode"
     default:
       OS_Abort(124);
       break;
+#pragma clang diagnostic pop
+
   }
   p->state = READY;
 }
@@ -314,7 +323,7 @@ void setReady(volatile PD* p)
  * can just restore its execution context on its stack.
  * (See file "cswitch.S" for details.)
  */
-PID Kernel_Create_Task_At( volatile PD *p, voidfuncptr f, int arg, PID pid, PRIORITIES py, TICK period, TICK wcet, TICK offset )
+PID Kernel_Create_Task_At(volatile PD *p, void_func_ptr f, int arg, PID pid, PRIORITIES py, TICK period, TICK wcet, TICK offset, TICK weight)
 {
    unsigned char *sp;
 
@@ -336,19 +345,19 @@ PID Kernel_Create_Task_At( volatile PD *p, voidfuncptr f, int arg, PID pid, PRIO
    //second), even though the AT90 is LITTLE ENDIAN machine.
 
    //Store terminate at the bottom of stack to protect against stack underrun.
-   *(unsigned char *)sp-- = ((unsigned int)Task_Terminate) & 0xff;
-   *(unsigned char *)sp-- = (((unsigned int)Task_Terminate) >> 8) & 0xff;
+   *(unsigned char *)sp-- = ((unsigned int)Task_Terminate) & 0xffu;
+   *(unsigned char *)sp-- = (((unsigned int)Task_Terminate) >> 8u) & 0xffu;
    *(unsigned char *)sp-- = 0x00;
 
    //Place return address of function at bottom of stack
-   *(unsigned char *)sp-- = ((unsigned int)f) & 0xff;
-   *(unsigned char *)sp-- = (((unsigned int)f) >> 8) & 0xff;
+   *(unsigned char *)sp-- = ((unsigned int)f) & 0xffu;
+   *(unsigned char *)sp-- = (((unsigned int)f) >> 8u) & 0xffu;
    *(unsigned char *)sp-- = 0x00;
 
    //Place stack pointer at top of stack
    sp = sp - 34;
    // set enable interrupt
-   *(unsigned char *)(sp+1) |= (1 << 7);
+   *(unsigned char *)(sp+1) |= (1u << 7u);
 
    p->sp = sp;		/* stack pointer into the "workSpace" */
    p->code = f;		/* function to be executed as a task */
@@ -365,6 +374,7 @@ PID Kernel_Create_Task_At( volatile PD *p, voidfuncptr f, int arg, PID pid, PRIO
    p->offset = offset;
    p->next_schedule = offset;
    p->executed_ticks = 0;
+   p->w = weight;
 
    /*----END of NEW CODE----*/
 
@@ -376,14 +386,13 @@ PID Kernel_Create_Task_At( volatile PD *p, voidfuncptr f, int arg, PID pid, PRIO
    }
 
    return p->pid;
-
 }
 
 
 /**
   *  Create a new task
   */
-static PID Kernel_Create_Task( voidfuncptr f, int arg, PRIORITIES py, TICK period, TICK wcet, TICK offset)
+static PID Kernel_Create_Task(void_func_ptr f, int arg, PRIORITIES py, TICK period, TICK wcet, TICK offset, TICK weight)
 {
    int x;
 
@@ -394,7 +403,7 @@ static PID Kernel_Create_Task( voidfuncptr f, int arg, PRIORITIES py, TICK perio
        if (Process[x].state == DEAD) break;
    }
    ++Tasks;
-   return Kernel_Create_Task_At( &(Process[x]), f, arg, x+1, py, period, wcet, offset);
+   return Kernel_Create_Task_At( &(Process[x]), f, arg, x+1, py, period, wcet, offset, weight);
    // #TODO if we just created a system or Timed task, we should call scheduler
    //Dispatch(); // ??????????
 
@@ -425,6 +434,14 @@ static void Dispatch()
       CurrentSp = Cp->sp;
       Cp->state = RUNNING;
       return;
+    }
+
+    // Should the WRR absorb the RR, because RR tasks are WRR tasks with w=1
+    if (count(&ReadyQWRR) > 0) {
+        Cp = dequeue(&ReadyQWRR);
+        CurrentSp = Cp->sp;
+        Cp->state = RUNNING;
+        return;
     }
 
     if (count(&ReadyQRR) > 0)
@@ -594,7 +611,7 @@ static void Next_Kernel_Request()
        switch(Cp->request){
        case CREATE:
           //  PORTA |= (1<<PA0);
-           Kernel_Create_Task( Cp->code, Cp->arg, Cp->py_arg, Cp->period_arg, Cp->wcet_arg, Cp->offset_arg);
+           Kernel_Create_Task( Cp->code, Cp->arg, Cp->py_arg, Cp->period_arg, Cp->wcet_arg, Cp->offset_arg, Cp->w);
            // If we just created a system or timed task, call dispatch
            if (Cp->py_arg < RR && Cp->py_arg < Cp->py){
              //#TODO we also set ready in kernel_create_task, but I think this
@@ -712,36 +729,32 @@ void OS_Abort(unsigned int error) {
 	for(;;){}
 }
 
+PID Task_Create_WRR(void_func_ptr f, int arg, int weight) {
+    if (KernelActive) {
+        Disable_Interrupt();
+        Cp->request = CREATE;
+        Cp->code = f;
+        Cp->arg = arg;
+        Cp->py_arg = RR; // Set as RR so it works.
+        Cp->period_arg = 0;
+        Cp->wcet_arg = 0;
+        Cp->offset_arg = 0;
+        Cp->w = weight;
 
-/**
-  * For this example, we only support cooperatively multitasking, i.e.,
-  * each task gives up its share of the processor voluntarily by calling
-  * Task_Next().
-  */
-PID Task_Create_RR( voidfuncptr f, int arg)
-{
-   if (KernelActive ) {
-     Disable_Interrupt();
-     Cp ->request = CREATE;
-     Cp->code = f;
-     Cp->arg = arg;
-     Cp->py_arg = RR;
-     Cp->period_arg = 0;
-     Cp->wcet_arg = 0;
-     Cp->offset_arg = 0;
-	 
-     PORTL = (1<<KERNEL_DEBUG_PIN);
-     Enter_Kernel();
-   } else {
-      /* call the RTOS function directly */
-      Kernel_Create_Task( f, arg, RR, 0, 0, 0);
-   }
-   // #TODO this is a hack to return the PID. If an interrupt happens at
-   // a bad time this could be wrong in theory..... IDK how to fix. API spec is weird
-   return Tasks;
+        PORTL = (1<<KERNEL_DEBUG_PIN);
+        Enter_Kernel();
+    } else {
+        Kernel_Create_Task(f, arg, RR, 0, 0, 0, weight); // Set py arg as RR so it works.
+    }
+    return Tasks;
 }
 
-PID Task_Create_Period(voidfuncptr f, int arg, TICK period, TICK wcet, TICK offset)
+PID Task_Create_RR(void_func_ptr f, int arg)
+{
+    return Task_Create_WRR(f, arg, 1); // Try to get this working before implimenting WRR.
+}
+
+PID Task_Create_Period(void_func_ptr f, int arg, TICK period, TICK wcet, TICK offset)
 {
   if (KernelActive ) {
     Disable_Interrupt();
@@ -753,16 +766,18 @@ PID Task_Create_Period(voidfuncptr f, int arg, TICK period, TICK wcet, TICK offs
     Cp->period_arg = period;
     Cp->wcet_arg = wcet;
     Cp->offset_arg = offset;
+    Cp->w = 0;
+
     PORTL = (1<<KERNEL_DEBUG_PIN);
     Enter_Kernel();
   } else {
      /* call the RTOS function directly */
-     Kernel_Create_Task( f, arg, TIME, period, wcet, offset);
+     Kernel_Create_Task( f, arg, TIME, period, wcet, offset, 0);
   }
   return Cp->pid;
 }
 
-PID Task_Create_System(voidfuncptr f, int arg)
+PID Task_Create_System(void_func_ptr f, int arg)
 {
   if (KernelActive ) {
     Disable_Interrupt();
@@ -773,16 +788,18 @@ PID Task_Create_System(voidfuncptr f, int arg)
     Cp->period_arg = 0;
     Cp->wcet_arg = 0;
     Cp->offset_arg = 0;
+    Cp->w = 0;
+
     PORTL = (1<<KERNEL_DEBUG_PIN);
     Enter_Kernel();
   } else {
      /* call the RTOS function directly */
-     Kernel_Create_Task( f, arg, SYSTEM, 0, 0, 0);
+     Kernel_Create_Task( f, arg, SYSTEM, 0, 0, 0, 0);
   }
   return Cp->pid;
 }
 
-PID Task_Create_Idle( voidfuncptr f, int arg)
+PID Task_Create_Idle(void_func_ptr f, int arg)
 {
    if (KernelActive ) {
      Disable_Interrupt();
@@ -793,20 +810,21 @@ PID Task_Create_Idle( voidfuncptr f, int arg)
      Cp->period = 0;
      Cp->wcet = 0;
      Cp->offset = 0;
+     Cp->w = 0;
 
      PORTL = (1<<KERNEL_DEBUG_PIN);
      Enter_Kernel();
    } else {
       /* call the RTOS function directly */
-      Kernel_Create_Task( f, arg, IDLE_TASK, 0, 0, 0);
+      Kernel_Create_Task( f, arg, IDLE_TASK, 0, 0, 0, 0);
    }
    return Cp->pid;
 }
 
 /**
-  * The calling task gives up its share of the processor voluntarily.
+  * Interrupt signaled task switch.
   */
-void Task_Next_2()
+void Task_Interrupted_Next()
 {
    if (KernelActive) {
      Disable_Interrupt();
@@ -816,11 +834,14 @@ void Task_Next_2()
   }
 }
 
+/**
+ * Task voluntarily gives up processor time.
+ */
 void Task_Next()
 {
   if (KernelActive) {
     if(Cp->py != TIME){
-      Task_Next_2();
+        Task_Interrupted_Next();
     }else{
       // Here we handle the edge case of a Time based task giving up the
       // processor voluntarily. It should suspend itself
@@ -945,6 +966,7 @@ void Timer_Init()
   TCCR3B |= (1<<WGM32);
 
   //Set prescaller to 1/8
+  TCCR3B |= (1<<CS30);
   TCCR3B |= (1<<CS31);
 
   //Set TOP value 0.0001s*MSECPERTICK
@@ -1001,7 +1023,7 @@ ISR(TIMER3_COMPA_vect)
   Kernel_Tick();
   if (Cp->py >= RR)
   {
-    Task_Next_2();
+      Task_Interrupted_Next();
   }
 }
 
