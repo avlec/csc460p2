@@ -4,6 +4,8 @@
 #define F_CPU 16000000
 #include "util/delay.h"
 #include "os.h"
+//#include "./blink/blink.h"
+
 /**
  * \file os.c
  * \brief A Skeleton Implementation of an RTOS
@@ -32,10 +34,9 @@
 
 // Declare a_main - this is going to be the first task created when we
 // run our RTOS - will come from either remote or base.c
-extern void a_main(void);
+extern void a_main();
 
-typedef void (*void_func_ptr) (void);      /* pointer to void f(void) */
-
+typedef void (*voidfuncptr)(void); /* pointer to void f(void) */
 
 /*===========
   * RTOS Internal
@@ -56,8 +57,8 @@ typedef void (*void_func_ptr) (void);      /* pointer to void f(void) */
   * again, but Cp is not running any more.
   * (See file "switch.S" for details.)
   */
-extern void CSwitch(void);
-extern void Exit_Kernel(void);    /* this is the same as CSwitch() */
+extern void CSwitch();
+extern void Exit_Kernel(); /* this is the same as CSwitch() */
 
 /* Prototype */
 void Task_Terminate(void);
@@ -75,22 +76,21 @@ void Task_Terminate(void);
   */
 extern void Enter_Kernel();
 
-#define Disable_Interrupt()		asm volatile ("cli"::)
-#define Enable_Interrupt()		asm volatile ("sei"::)
+#define Disable_Interrupt() asm volatile("cli" ::)
+#define Enable_Interrupt() asm volatile("sei" ::)
 #define KERNEL_DEBUG_PIN PL4
 #define OS_ABORT_DEBUG_PORT PORTC
-
 
 /**
   *  This is the set of states that a task can be in at any given time.
   */
 typedef enum process_states
 {
-   DEAD = 0,
-   READY,
-   RUNNING,
-   BLOCKED,
-   SUSPENDED
+  DEAD = 0,
+  READY,
+  RUNNING,
+  BLOCKED,
+  SUSPENDED
 } PROCESS_STATES;
 
 /**
@@ -98,23 +98,23 @@ typedef enum process_states
   */
 typedef enum kernel_request_type
 {
-   NONE = 0,
-   CREATE,
-   NEXT,
-   TERMINATE,
-   NEXT_TIME,
-   CHAN_INIT,
-   CHAN_SEND,
-   CHAN_RECV,
-   CHAN_WRITE
+  NONE = 0,
+  CREATE,
+  NEXT,
+  TERMINATE,
+  NEXT_TIME,
+  CHAN_INIT,
+  CHAN_SEND,
+  CHAN_RECV,
+  CHAN_WRITE
 } KERNEL_REQUEST_TYPE;
 
 typedef enum priorities
 {
   SYSTEM = 0,
   TIME,
-  WRR,
   RR,
+  //WRR,
   IDLE_TASK
 } PRIORITIES;
 
@@ -125,38 +125,38 @@ typedef enum priorities
   */
 typedef struct ProcessDescriptor
 {
-   PID pid;
-   PRIORITIES py;
-   WEIGHT w;
-   volatile unsigned char *sp;   /* stack pointer into the "workSpace" */
-   unsigned char workSpace[WORKSPACE];
-   PROCESS_STATES state;
-   void_func_ptr  code;   /* function to be executed as a task */
-   KERNEL_REQUEST_TYPE request;
-   int arg;
-   int kernel_response;
-   CHAN comm_chan;
-   int kernel_chan_arg;
+  PID pid;
+  PRIORITIES py;
+  WEIGHT w;
+  volatile unsigned char *sp; /* stack pointer into the "workSpace" */
+  unsigned char workSpace[WORKSPACE];
+  PROCESS_STATES state;
+  voidfuncptr code; /* function to be executed as a task */
+  KERNEL_REQUEST_TYPE request;
+  int arg;
+  int kernel_response;
+  CHAN comm_chan;
+  int kernel_chan_arg;
 
-   // Atrributes for time-based tasks
-   TICK period;
-   TICK wcet;
-   TICK offset;
-   TICK next_schedule;
-   TICK executed_ticks;
-   TICK remaining_ticks;
+  // Atrributes for time-based tasks
+  TICK period;
+  TICK wcet;
+  TICK offset;
+  TICK next_schedule;
+  TICK executed_ticks;
+  TICK remaining_ticks;
 
-   PRIORITIES py_arg;
-   TICK period_arg;
-   TICK wcet_arg;
-   TICK offset_arg;
+  PRIORITIES py_arg;
+  TICK period_arg;
+  TICK wcet_arg;
+  TICK offset_arg;
 
 } PD;
 
 // Queue Implementation
 typedef struct ReadyQueue
 {
-  volatile PD* queue[MAXPROCESS];
+  volatile PD *queue[MAXPROCESS];
   volatile int count;
   volatile int front;
   volatile int end;
@@ -169,9 +169,9 @@ typedef struct ReadyQueue
 static PD Process[MAXPROCESS];
 
 // The ready queues - time based tasks can only ever have one task queued
-RQ ReadyQWRR = { .count = 0, .front = 0, .end = 0};
-
 RQ ReadyQRR = {.count = 0, .front = 0, .end = 0};
+
+//RQ ReadyQWRR = {.count = 0, .front = 0, .end = 0};
 
 RQ ReadyQTime = {.count = 0, .front = 0, .end = 0};
 
@@ -181,11 +181,11 @@ RQ ReadyQIdle = {.count = 0, .front = 0, .end = 0};
 
 volatile TICK current_tick = 0;
 
-
 /**
   * The process descriptor of the currently RUNNING task.
   */
-volatile static PD* Cp;
+volatile static PD *Cp;
+volatile static unsigned int CurrentTaskTicks;
 
 /**
   * Since this is a "full-served" model, the kernel is executing using its own
@@ -213,21 +213,23 @@ volatile static unsigned int KernelActive;
 /** number of tasks created so far */
 volatile static unsigned int Tasks;
 
-typedef enum ChannelState {
-	NOT_INIT = 0,
-	IDLE,
-	SENDER_WAIT,
-	RECEIVER_WAIT
+typedef enum ChannelState
+{
+  NOT_INIT = 0,
+  IDLE,
+  SENDER_WAIT,
+  RECEIVER_WAIT
 } CHANNEL_STATE;
 
 /**
   * Channel object for data transmission between tasks
   */
-typedef struct channel {
-	CHANNEL_STATE state;
-	PD *sender;
-	RQ receivers;
-	int val;
+typedef struct channel
+{
+  CHANNEL_STATE state;
+  PD *sender;
+  RQ receivers;
+  int val;
 } CHANNEL;
 
 /**
@@ -237,12 +239,13 @@ static CHANNEL channels[MAXCHAN];
 
 volatile static unsigned int chanCount;
 
-typedef enum ErrorCodes {
-	NO_ERROR = 0,
-	ERROR_EXCEEDS_MAXPROCESS,
-	ERROR_EXCEEDS_MAXCHAN,
-	ERROR_PERIODIC_BLOCK_OP,
-	ERROR_TOO_MANY_SENDERS,
+typedef enum ErrorCodes
+{
+  NO_ERROR = 0,
+  ERROR_EXCEEDS_MAXPROCESS,
+  ERROR_EXCEEDS_MAXCHAN,
+  ERROR_PERIODIC_BLOCK_OP,
+  ERROR_TOO_MANY_SENDERS,
   ERROR_PERIODIC_TASK_COLLISION,
   ERROR_WCET_VIOLATION
 } ERROR_CODES;
@@ -255,9 +258,10 @@ circular array. We need 2 integer indexes, one represents the front, one the end
 When we enqueue, we move the end forwards, wrapping around. When we dequeue,
 we move the front forwards, wrapping around.
 */
-void enqueue(volatile RQ* q, volatile PD* p)
+void enqueue(volatile RQ *q, volatile PD *p)
 {
-  if (q->count == MAXPROCESS){
+  if (q->count == MAXPROCESS)
+  {
     // #TODO make this error code useful!
     OS_Abort(12);
   }
@@ -266,53 +270,52 @@ void enqueue(volatile RQ* q, volatile PD* p)
   q->end = (q->end + 1) % MAXPROCESS;
 }
 
-volatile PD* dequeue(volatile RQ* q)
+volatile PD *dequeue(volatile RQ *q)
 {
-  if (q->count == 0){
+  if (q->count == 0)
+  {
     OS_Abort(13);
   }
-  volatile PD* result = q->queue[q->front];
+  volatile PD *result = q->queue[q->front];
   q->count--;
   q->front = (q->front + 1) % MAXPROCESS;
   return result;
 }
 
-volatile int count(volatile RQ* q)
+volatile int count(volatile RQ *q)
 {
   return q->count;
 }
 
 // Put the task on the correct ready queue, and set its state to ready
-void setReady(volatile PD* p)
+void setReady(volatile PD *p)
 {
-  switch (p->py){
-    case IDLE_TASK:
-      enqueue(&ReadyQIdle, p);
-	  break;
-    case WRR:
-        enqueue(&ReadyQWRR, p);
-        break;
-    case RR:
-      enqueue(&ReadyQRR, p);
-      break;
-    case TIME:
-      enqueue(&ReadyQTime, p);
-      // If we ever set a time-task ready when there is a time-task already
-      // ready, we have a timing violation, so we abort with error code
-      if(count(&ReadyQTime) > 1){
-        OS_Abort(ERROR_PERIODIC_TASK_COLLISION);
-      }
-      break;
-    case SYSTEM:
-      enqueue(&ReadyQSystem, p);
-      break;
-#pragma clang diagnostic push
-#pragma ide diagnostic ignored "UnreachableCode"
-    default:
-      OS_Abort(124);
-      break;
-#pragma clang diagnostic pop
-
+  switch (p->py)
+  {
+  case IDLE_TASK:
+    enqueue(&ReadyQIdle, p);
+    break;
+  case RR:
+    enqueue(&ReadyQRR, p);
+    break;
+  // case WRR:
+  //   enqueue(&ReadyQRR, p); //experimenting this is changed
+  //   break;
+  case TIME:
+    enqueue(&ReadyQTime, p);
+    // If we ever set a time-task ready when there is a time-task already
+    // ready, we have a timing violation, so we abort with error code
+    if (count(&ReadyQTime) > 1)
+    {
+      OS_Abort(ERROR_PERIODIC_TASK_COLLISION);
+    }
+    break;
+  case SYSTEM:
+    enqueue(&ReadyQSystem, p);
+    break;
+  default:
+    OS_Abort(124);
+    break;
   }
   p->state = READY;
 }
@@ -323,90 +326,92 @@ void setReady(volatile PD* p)
  * can just restore its execution context on its stack.
  * (See file "cswitch.S" for details.)
  */
-PID Kernel_Create_Task_At(volatile PD *p, void_func_ptr f, int arg, PID pid, PRIORITIES py, TICK period, TICK wcet, TICK offset, TICK weight)
+PID Kernel_Create_Task_At(volatile PD *p, voidfuncptr f, int arg, PID pid, PRIORITIES py, TICK period, TICK wcet, TICK offset, WEIGHT weight)
 {
-   unsigned char *sp;
+  unsigned char *sp;
 
-   //Changed -2 to -1 to fix off by one error.
-   sp = (unsigned char *) &(p->workSpace[WORKSPACE-1]);
+  //Changed -2 to -1 to fix off by one error.
+  sp = (unsigned char *)&(p->workSpace[WORKSPACE - 1]);
 
+  /*----BEGIN of NEW CODE----*/
+  //Initialize the workspace (i.e., stack) and PD here!
 
+  //Clear the contents of the workspace
+  memset(&(p->workSpace), 0, WORKSPACE);
 
-   /*----BEGIN of NEW CODE----*/
-   //Initialize the workspace (i.e., stack) and PD here!
+  //Notice that we are placing the address (16-bit) of the functions
+  //onto the stack in reverse byte order (least significant first, followed
+  //by most significant).  This is because the "return" assembly instructions
+  //(rtn and rti) pop addresses off in BIG ENDIAN (most sig. first, least sig.
+  //second), even though the AT90 is LITTLE ENDIAN machine.
 
-   //Clear the contents of the workspace
-   memset(&(p->workSpace),0,WORKSPACE);
+  //Store terminate at the bottom of stack to protect against stack underrun.
+  *(unsigned char *)sp-- = ((unsigned int)Task_Terminate) & 0xff;
+  *(unsigned char *)sp-- = (((unsigned int)Task_Terminate) >> 8) & 0xff;
+  *(unsigned char *)sp-- = 0x00;
 
-   //Notice that we are placing the address (16-bit) of the functions
-   //onto the stack in reverse byte order (least significant first, followed
-   //by most significant).  This is because the "return" assembly instructions
-   //(rtn and rti) pop addresses off in BIG ENDIAN (most sig. first, least sig.
-   //second), even though the AT90 is LITTLE ENDIAN machine.
+  //Place return address of function at bottom of stack
+  *(unsigned char *)sp-- = ((unsigned int)f) & 0xff;
+  *(unsigned char *)sp-- = (((unsigned int)f) >> 8) & 0xff;
+  *(unsigned char *)sp-- = 0x00;
 
-   //Store terminate at the bottom of stack to protect against stack underrun.
-   *(unsigned char *)sp-- = ((unsigned int)Task_Terminate) & 0xffu;
-   *(unsigned char *)sp-- = (((unsigned int)Task_Terminate) >> 8u) & 0xffu;
-   *(unsigned char *)sp-- = 0x00;
+  //Place stack pointer at top of stack
+  sp = sp - 34;
+  // set enable interrupt
+  *(unsigned char *)(sp + 1) |= (1 << 7);
 
-   //Place return address of function at bottom of stack
-   *(unsigned char *)sp-- = ((unsigned int)f) & 0xffu;
-   *(unsigned char *)sp-- = (((unsigned int)f) >> 8u) & 0xffu;
-   *(unsigned char *)sp-- = 0x00;
+  p->sp = sp;  /* stack pointer into the "workSpace" */
+  p->code = f; /* function to be executed as a task */
+  p->request = NONE;
+  p->arg = arg;
+  p->pid = pid;
+  p->py = py;
+  p->request = NONE;
+  p->w = weight;
 
-   //Place stack pointer at top of stack
-   sp = sp - 34;
-   // set enable interrupt
-   *(unsigned char *)(sp+1) |= (1u << 7u);
+  // time-based stuff
+  //#TODO consider the current tick in this
+  p->period = period;
+  p->wcet = wcet;
+  p->offset = offset;
+  p->next_schedule = offset;
+  p->executed_ticks = 0;
 
-   p->sp = sp;		/* stack pointer into the "workSpace" */
-   p->code = f;		/* function to be executed as a task */
-   p->request = NONE;
-   p->arg = arg;
-   p->pid = pid;
-   p->py = py;
-   p->request = NONE;
+  /*----END of NEW CODE----*/
 
-   // time-based stuff
-   //#TODO consider the current tick in this
-   p->period = period;
-   p->wcet = wcet;
-   p->offset = offset;
-   p->next_schedule = offset;
-   p->executed_ticks = 0;
-   p->w = weight;
+  if (py == TIME)
+  {
+    p->state = SUSPENDED;
+  }
+  else
+  {
+    //put on ready queue
+    setReady(p);
+  }
 
-   /*----END of NEW CODE----*/
-
-   if (py == TIME) {
-	p->state = SUSPENDED;
-   } else {
-	   //put on ready queue
-	   setReady(p);
-   }
-
-   return p->pid;
+  return p->pid;
 }
-
 
 /**
   *  Create a new task
   */
-static PID Kernel_Create_Task(void_func_ptr f, int arg, PRIORITIES py, TICK period, TICK wcet, TICK offset, TICK weight)
+static PID Kernel_Create_Task(voidfuncptr f, int arg, PRIORITIES py, TICK period, TICK wcet, TICK offset, WEIGHT weight)
 {
-   int x;
+  int x;
 
-   if (Tasks == MAXPROCESS) return 0;  /* Too many task! */
+  if (Tasks == MAXPROCESS)
+    return 0; /* Too many task! */
 
-   /* find a DEAD PD that we can use  */
-   for (x = 0; x < MAXPROCESS; x++) {
-       if (Process[x].state == DEAD) break;
-   }
-   ++Tasks;
-   return Kernel_Create_Task_At( &(Process[x]), f, arg, x+1, py, period, wcet, offset, weight);
-   // #TODO if we just created a system or Timed task, we should call scheduler
-   //Dispatch(); // ??????????
-
+  /* find a DEAD PD that we can use  */
+  for (x = 0; x < MAXPROCESS; x++)
+  {
+    if (Process[x].state == DEAD)
+      break;
+  }
+  ++Tasks;
+  return Kernel_Create_Task_At(&(Process[x]), f, arg, x + 1, py, period, wcet, offset, weight);
+  // #TODO if we just created a system or Timed task, we should call scheduler
+  //Dispatch(); // ??????????
 }
 
 /**
@@ -415,60 +420,60 @@ static PID Kernel_Create_Task(void_func_ptr f, int arg, PRIORITIES py, TICK peri
   */
 static void Dispatch()
 {
-   /* find the next READY task
+  /* find the next READY task
     * Note: if there is no READY task, then this will loop forever!.
     */
-    if (count(&ReadyQSystem) > 0)
-    {
-      Cp = dequeue(&ReadyQSystem);
-      //  Cp = &(Process[NextP]);
-      CurrentSp = Cp->sp;
-      Cp->state = RUNNING;
-      return;
-    }
+  if (count(&ReadyQSystem) > 0)
+  {
+    Cp = dequeue(&ReadyQSystem);
+    //  Cp = &(Process[NextP]);
+    CurrentSp = Cp->sp;
+    Cp->state = RUNNING;
+    return;
+  }
 
-    if (count(&ReadyQTime) > 0)
-    {
-      Cp = dequeue(&ReadyQTime);
-      //  Cp = &(Process[NextP]);
-      CurrentSp = Cp->sp;
-      Cp->state = RUNNING;
-      return;
-    }
+  if (count(&ReadyQTime) > 0)
+  {
+    Cp = dequeue(&ReadyQTime);
+    //  Cp = &(Process[NextP]);
+    CurrentSp = Cp->sp;
+    Cp->state = RUNNING;
+    return;
+  }
 
-    // Should the WRR absorb the RR, because RR tasks are WRR tasks with w=1
-    if (count(&ReadyQWRR) > 0) {
-        Cp = dequeue(&ReadyQWRR);
-        CurrentSp = Cp->sp;
-        Cp->state = RUNNING;
-        return;
-    }
+  // if (count(&ReadyQWRR) > 0)
+  // {
+  //   Cp = dequeue(&ReadyQWRR);
+  //   CurrentSp = Cp->sp;
+  //   Cp->state = RUNNING;
+  //   return;
+  // }
 
-    if (count(&ReadyQRR) > 0)
-    {
-      Cp = dequeue(&ReadyQRR);
-      //  Cp = &(Process[NextP]);
-      CurrentSp = Cp->sp;
-      Cp->state = RUNNING;
-      return;
-    }
+  if (count(&ReadyQRR) > 0)
+  {
+    Cp = dequeue(&ReadyQRR);
+    //  Cp = &(Process[NextP]);
+    CurrentSp = Cp->sp;
+    Cp->state = RUNNING;
+    return;
+  }
 
-    if (count(&ReadyQIdle) > 0)
-    {
-      Cp = dequeue(&ReadyQIdle);
-      CurrentSp = Cp->sp;
-      Cp->state = RUNNING;
-      return;
-    }
+  if (count(&ReadyQIdle) > 0)
+  {
+    Cp = dequeue(&ReadyQIdle);
+    CurrentSp = Cp->sp;
+    Cp->state = RUNNING;
+    return;
+  }
 
-    // WE SHOULD NEVER BE HERE HOPEFULLY
-    OS_Abort(24);
+  // WE SHOULD NEVER BE HERE HOPEFULLY
+  OS_Abort(24);
 
-    // //  Cp = &(Process[NextP]);
-    // CurrentSp = Cp->sp;
-    // Cp->state = RUNNING;
+  // //  Cp = &(Process[NextP]);
+  // CurrentSp = Cp->sp;
+  // Cp->state = RUNNING;
 
-    //  NextP = (NextP + 1) % MAXPROCESS;
+  //  NextP = (NextP + 1) % MAXPROCESS;
 }
 
 /**
@@ -476,100 +481,122 @@ static void Dispatch()
   */
 CHAN Kernel_Chan_Init()
 {
-	if (chanCount >= MAXCHAN) {
-		// No available channels - Print error and NO-OP/continue
-		OS_Abort(ERROR_EXCEEDS_MAXCHAN);
-		return NULL;
-	} else {
-		channels[chanCount].state = IDLE;
-		channels[chanCount].receivers.count = 0;
-		channels[chanCount].receivers.front = NULL;
-		channels[chanCount].receivers.end = NULL;
-		return ++chanCount;
-	}
+  if (chanCount >= MAXCHAN)
+  {
+    // No available channels - Print error and NO-OP/continue
+    OS_Abort(ERROR_EXCEEDS_MAXCHAN);
+    return NULL;
+  }
+  else
+  {
+    channels[chanCount].state = IDLE;
+    channels[chanCount].receivers.count = 0;
+    channels[chanCount].receivers.front = NULL;
+    channels[chanCount].receivers.end = NULL;
+    return ++chanCount;
+  }
 }
 
 void Kernel_Chan_Send()
 {
-	if (Cp->py == TIME) OS_Abort(ERROR_PERIODIC_BLOCK_OP);
+  if (Cp->py == TIME)
+    OS_Abort(ERROR_PERIODIC_BLOCK_OP);
 
-    CHANNEL *chan = &(channels[Cp->comm_chan-1]);
+  CHANNEL *chan = &(channels[Cp->comm_chan - 1]);
 
-    // Check that the channel has been initialized
-    if (chan->state == NOT_INIT) OS_Abort(2);
+  // Check that the channel has been initialized
+  if (chan->state == NOT_INIT)
+    OS_Abort(2);
 
-    if (chan->state == SENDER_WAIT) OS_Abort(ERROR_TOO_MANY_SENDERS);
+  if (chan->state == SENDER_WAIT)
+    OS_Abort(ERROR_TOO_MANY_SENDERS);
 
-	chan->val = Cp->kernel_chan_arg;
-    if (chan->state == RECEIVER_WAIT) {
-		// Send value & remove recipient from queue
-		while (count(&(chan->receivers)) > 0){
-			PD *receiver = dequeue(&(chan->receivers));
-			receiver->kernel_response = chan->val;
-			setReady(receiver);
-			if (receiver->py < Cp->py) {
-				setReady(Cp);
-				Dispatch();
-			}
-		}
-		chan->state = IDLE;
-	} else {
-		// Wait for a receiver...
-		chan->state = SENDER_WAIT;
-		chan->sender = Cp;
-		Cp->state = BLOCKED;
+  chan->val = Cp->kernel_chan_arg;
+  if (chan->state == RECEIVER_WAIT)
+  {
+    // Send value & remove recipient from queue
+    while (count(&(chan->receivers)) > 0)
+    {
+      PD *receiver = dequeue(&(chan->receivers));
+      receiver->kernel_response = chan->val;
+      setReady(receiver);
+      if (receiver->py < Cp->py)
+      {
+        setReady(Cp);
+        Dispatch();
+      }
     }
+    chan->state = IDLE;
+  }
+  else
+  {
+    // Wait for a receiver...
+    chan->state = SENDER_WAIT;
+    chan->sender = Cp;
+    Cp->state = BLOCKED;
+  }
 }
 
 void Kernel_Chan_Receive()
 {
-	if (Cp->py == TIME) OS_Abort(ERROR_PERIODIC_BLOCK_OP);
+  if (Cp->py == TIME)
+    OS_Abort(ERROR_PERIODIC_BLOCK_OP);
 
-	CHANNEL *chan = &(channels[Cp->comm_chan-1]);
+  CHANNEL *chan = &(channels[Cp->comm_chan - 1]);
 
-	// Check that the channel has been initialized
-	if (chan->state == NOT_INIT) OS_Abort(2);
+  // Check that the channel has been initialized
+  if (chan->state == NOT_INIT)
+    OS_Abort(2);
 
-	if (chan->state == SENDER_WAIT) {
-		Cp->kernel_response = chan->val;
-		setReady(chan->sender);
-		if (chan->sender->py < Cp->py) {
-			setReady(Cp);
-			Dispatch();
-		}
-		chan->sender = NULL;
-		chan->state = IDLE;
-	} else {
-		enqueue(&(chan->receivers), Cp);
-		chan->state = RECEIVER_WAIT;
-		Cp->state = BLOCKED;
-	}
+  if (chan->state == SENDER_WAIT)
+  {
+    Cp->kernel_response = chan->val;
+    setReady(chan->sender);
+    if (chan->sender->py < Cp->py)
+    {
+      setReady(Cp);
+      Dispatch();
+    }
+    chan->sender = NULL;
+    chan->state = IDLE;
+  }
+  else
+  {
+    enqueue(&(chan->receivers), Cp);
+    chan->state = RECEIVER_WAIT;
+    Cp->state = BLOCKED;
+  }
 }
 
 void Kernel_Chan_Write()
 {
-    CHANNEL *chan = &(channels[Cp->comm_chan-1]);
+  CHANNEL *chan = &(channels[Cp->comm_chan - 1]);
 
-	// Check that the channel has been initialized
-	if (chan->state == NOT_INIT) OS_Abort(2);
+  // Check that the channel has been initialized
+  if (chan->state == NOT_INIT)
+    OS_Abort(2);
 
-	if (chan->state == SENDER_WAIT) OS_Abort(ERROR_TOO_MANY_SENDERS);
+  if (chan->state == SENDER_WAIT)
+    OS_Abort(ERROR_TOO_MANY_SENDERS);
 
-	// Only write if receivers waiting
-	if (chan->state == RECEIVER_WAIT) {
-		chan->val = Cp->kernel_chan_arg;
-		// Send value & remove recipient from queue
-		while (count(&(chan->receivers)) > 0){
-			PD *receiver = dequeue(&(chan->receivers));
-			receiver->kernel_response = chan->val;
-			setReady(receiver);
-			if (receiver->py < Cp->py) {
-				setReady(Cp);
-				Dispatch();
-			}
-		}
-		chan->state = IDLE;
-	}
+  // Only write if receivers waiting
+  if (chan->state == RECEIVER_WAIT)
+  {
+    chan->val = Cp->kernel_chan_arg;
+    // Send value & remove recipient from queue
+    while (count(&(chan->receivers)) > 0)
+    {
+      PD *receiver = dequeue(&(chan->receivers));
+      receiver->kernel_response = chan->val;
+      setReady(receiver);
+      if (receiver->py < Cp->py)
+      {
+        setReady(Cp);
+        Dispatch();
+      }
+    }
+    chan->state = IDLE;
+  }
 }
 
 /**
@@ -582,96 +609,101 @@ void Kernel_Chan_Write()
   */
 static void Next_Kernel_Request()
 {
-   Dispatch();  /* select a new task to run */
+  Dispatch(); /* select a new task to run */
 
-   while(1) {
-       Cp->request = NONE; /* clear its request */
+  while (1)
+  {
+    Cp->request = NONE; /* clear its request */
 
-       /* activate this newly selected task */
-       CurrentSp = Cp->sp;
-       Exit_Kernel();    /* or CSwitch() */
+    /* activate this newly selected task */
+    CurrentSp = Cp->sp;
+    Exit_Kernel(); /* or CSwitch() */
 
-       /* if this task makes a system call, it will return to here! */
+    /* if this task makes a system call, it will return to here! */
 
-        /* save the Cp's stack pointer */
-       Cp->sp = CurrentSp;
+    /* save the Cp's stack pointer */
+    Cp->sp = CurrentSp;
 
-      //#TODO need to implement suspend so a time based task can give up CPU to resume
-      // on the correct tick. What this will look like:
-            // all tasks call task_next to give up CPU
-            // if task was timed, then it suspends
-            // else behaves as it does now
-            // Every tick when we are in the kernel, we increment a TICK counter
-            // Then we check all tasks with py = TIME for what their next tick
-            // should be. If there is one that should be scheduled this tick, we
-            // call setReady on it, and then continue to the scheduler
-            // NOTE: This should ONLY EVER happen on a KERNEL TICK and not if a user
-            // process is making a kernel request, so this should be specific to the
-            // NONE case below I think
-       switch(Cp->request){
-       case CREATE:
-          //  PORTA |= (1<<PA0);
-           Kernel_Create_Task( Cp->code, Cp->arg, Cp->py_arg, Cp->period_arg, Cp->wcet_arg, Cp->offset_arg, Cp->w);
-           // If we just created a system or timed task, call dispatch
-           if (Cp->py_arg < RR && Cp->py_arg < Cp->py){
-             //#TODO we also set ready in kernel_create_task, but I think this
-             // is correct as in create we set ready the new task, but this should
-             // set ready the task we are about to context-switch out of
-             setReady(Cp);
-             Dispatch();
-           }
-          //  PORTA &= ~(1<<PA0);
-           break;
-       case NEXT:
-	     case NONE:
-        //  PORTA |= (1<<PA1);
-           /* NONE could be caused by a timer interrupt */
-           setReady(Cp);
-           Dispatch();
-          // PORTA &= ~(1<<PA1);
-          break;
-       case NEXT_TIME:
-          //  PORTA |= (1<<PA2);
-           Cp->executed_ticks = 0;
-           Cp->state = SUSPENDED;
-           Dispatch();
-          //  PORTA &= ~(1<<PA2);
-		   break;
-       case TERMINATE:
-        //  PORTA |= (1<<PA4);
-          /* deallocate all resources used by this task */
-          Cp->state = DEAD;
-		  Tasks--;
-          Dispatch();
-          // PORTA &= ~(1<<PA4);
-          break;
-	   case CHAN_INIT:
-        // PORTA |= (1<<PA5);
-		    Cp->kernel_response = Kernel_Chan_Init();
-	      // PORTA &= ~(1<<PA5);
-        break;
-	   case CHAN_SEND:
-        // PORTA |= (1<<PA6);
-	      Kernel_Chan_Send();
-		  if (Cp->state == BLOCKED) Dispatch();
-        // PORTA &= ~(1<<PA6);
-	      break;
-	   case CHAN_RECV:
+    //#TODO need to implement suspend so a time based task can give up CPU to resume
+    // on the correct tick. What this will look like:
+    // all tasks call task_next to give up CPU
+    // if task was timed, then it suspends
+    // else behaves as it does now
+    // Every tick when we are in the kernel, we increment a TICK counter
+    // Then we check all tasks with py = TIME for what their next tick
+    // should be. If there is one that should be scheduled this tick, we
+    // call setReady on it, and then continue to the scheduler
+    // NOTE: This should ONLY EVER happen on a KERNEL TICK and not if a user
+    // process is making a kernel request, so this should be specific to the
+    // NONE case below I think
+    switch (Cp->request)
+    {
+    case CREATE:
+      //  PORTA |= (1<<PA0);
+      Kernel_Create_Task(Cp->code, Cp->arg, Cp->py_arg, Cp->period_arg, Cp->wcet_arg, Cp->offset_arg, Cp->w);
+      // If we just created a system or timed task, call dispatch
+      if (Cp->py_arg < RR && Cp->py_arg < Cp->py)
+      {
+        //#TODO we also set ready in kernel_create_task, but I think this
+        // is correct as in create we set ready the new task, but this should
+        // set ready the task we are about to context-switch out of
+        setReady(Cp);
+        Dispatch();
+      }
+      //  PORTA &= ~(1<<PA0);
+      break;
+    case NEXT:
+    case NONE:
+      //  PORTA |= (1<<PA1);
+      /* NONE could be caused by a timer interrupt */
+      setReady(Cp);
+      Dispatch();
+      // PORTA &= ~(1<<PA1);
+      break;
+    case NEXT_TIME:
+      //  PORTA |= (1<<PA2);
+      Cp->executed_ticks = 0;
+      Cp->state = SUSPENDED;
+      Dispatch();
+      //  PORTA &= ~(1<<PA2);
+      break;
+    case TERMINATE:
+      //  PORTA |= (1<<PA4);
+      /* deallocate all resources used by this task */
+      Cp->state = DEAD;
+      Tasks--;
+      Dispatch();
+      // PORTA &= ~(1<<PA4);
+      break;
+    case CHAN_INIT:
+      // PORTA |= (1<<PA5);
+      Cp->kernel_response = Kernel_Chan_Init();
+      // PORTA &= ~(1<<PA5);
+      break;
+    case CHAN_SEND:
+      // PORTA |= (1<<PA6);
+      Kernel_Chan_Send();
+      if (Cp->state == BLOCKED)
+        Dispatch();
+      // PORTA &= ~(1<<PA6);
+      break;
+    case CHAN_RECV:
       //  PORTA |= (1<<PA7);
-	      Kernel_Chan_Receive();
-		  if (Cp->state == BLOCKED) Dispatch();
-        // PORTA &= ~(1<<PA7);
-	      break;
-	   case CHAN_WRITE:
+      Kernel_Chan_Receive();
+      if (Cp->state == BLOCKED)
+        Dispatch();
+      // PORTA &= ~(1<<PA7);
+      break;
+    case CHAN_WRITE:
       //  PORTA |= (1<<PA3);
-	      Kernel_Chan_Write();
-        // PORTA &= ~(1<<PA3);
-	      break;
-       default:
-          /* Houston! we have a problem here! */
-          break;
-       }
+      Kernel_Chan_Write();
+      // PORTA &= ~(1<<PA3);
+      break;
+    default:
+      /* Houston! we have a problem here! */
+      break;
     }
+  }
 }
 
 /*================
@@ -685,80 +717,122 @@ static void Next_Kernel_Request()
   */
 void OS_Init()
 {
-   int x;
+  int x;
 
-   Tasks = 0;
-   KernelActive = 0;
-   NextP = 0;
-	//Reminder: Clear the memory for the task on creation.
-   for (x = 0; x < MAXPROCESS; x++) {
-      memset(&(Process[x]),0,sizeof(PD));
-      Process[x].state = DEAD;
-   }
+  Tasks = 0;
+  CurrentTaskTicks = 0;
+  KernelActive = 0;
+  NextP = 0;
+  //Reminder: Clear the memory for the task on creation.
+  for (x = 0; x < MAXPROCESS; x++)
+  {
+    memset(&(Process[x]), 0, sizeof(PD));
+    Process[x].state = DEAD;
+  }
 
-   // Channel memory allocation
-   chanCount = 0;
-   for (x = 0; x < MAXCHAN; x++) {
-	   memset(&(channels[x]),0,sizeof(CHANNEL));
-	   channels[x].state = NOT_INIT;
-   }
+  // Channel memory allocation
+  chanCount = 0;
+  for (x = 0; x < MAXCHAN; x++)
+  {
+    memset(&(channels[x]), 0, sizeof(CHANNEL));
+    channels[x].state = NOT_INIT;
+  }
 }
-
 
 /**
   * This function starts the RTOS after creating a few tasks.
   */
 void OS_Start()
 {
-   if ( (! KernelActive) && (Tasks > 0)) {
-       Disable_Interrupt();
-      /* we may have to initialize the interrupt vector for Enter_Kernel() here. */
+  if ((!KernelActive) && (Tasks > 0))
+  {
+    Disable_Interrupt();
+    /* we may have to initialize the interrupt vector for Enter_Kernel() here. */
 
-      /* here we go...  */
-      KernelActive = 1;
-      Next_Kernel_Request();
-      /* NEVER RETURNS!!! */
-   }
+    /* here we go...  */
+    KernelActive = 1;
+    Next_Kernel_Request();
+    /* NEVER RETURNS!!! */
+  }
 }
 
 /**
   * TODO: communicate error code
   */
-void OS_Abort(unsigned int error) {
-	OS_ABORT_DEBUG_PORT = error;
-	for(;;){}
-}
-
-PID Task_Create_WRR(void_func_ptr f, int arg, int weight) {
-    if (KernelActive) {
-        Disable_Interrupt();
-        Cp->request = CREATE;
-        Cp->code = f;
-        Cp->arg = arg;
-        Cp->py_arg = RR; // Set as RR so it works.
-        Cp->period_arg = 0;
-        Cp->wcet_arg = 0;
-        Cp->offset_arg = 0;
-        Cp->w = weight;
-
-        PORTL = (1<<KERNEL_DEBUG_PIN);
-        Enter_Kernel();
-    } else {
-        Kernel_Create_Task(f, arg, RR, 0, 0, 0, weight); // Set py arg as RR so it works.
-    }
-    return Tasks;
-}
-
-PID Task_Create_RR(void_func_ptr f, int arg)
+void OS_Abort(unsigned int error)
 {
-    return Task_Create_WRR(f, arg, 1); // Try to get this working before implimenting WRR.
+  OS_ABORT_DEBUG_PORT = error;
+  for (;;)
+  {
+  }
 }
 
-PID Task_Create_Period(void_func_ptr f, int arg, TICK period, TICK wcet, TICK offset)
+/**
+  * For this example, we only support cooperatively multitasking, i.e.,
+  * each task gives up its share of the processor voluntarily by calling
+  * Task_Next().
+  */
+
+PID Task_Create_WRR(voidfuncptr f, int arg, int weight)
 {
-  if (KernelActive ) {
+  if (KernelActive)
+  {
     Disable_Interrupt();
-    Cp ->request = CREATE;
+    Cp->request = CREATE;
+    Cp->code = f;
+    Cp->arg = arg;
+    Cp->w = weight;
+    Cp->py_arg = RR;
+    Cp->period_arg = 0;
+    Cp->wcet_arg = 0;
+    Cp->offset_arg = 0;
+
+    PORTL = (1 << KERNEL_DEBUG_PIN);
+    Enter_Kernel();
+  }
+  else
+  {
+    /* call the RTOS function directly */
+    Kernel_Create_Task(f, arg, RR, 0, 0, 0, weight);
+  }
+  // #TODO this is a hack to return the PID. If an interrupt happens at
+  // a bad time this could be wrong in theory..... IDK how to fix. API spec is weird
+  return Tasks;
+}
+
+PID Task_Create_RR(voidfuncptr f, int arg)
+{
+  // if (KernelActive)
+  // {
+  //   Disable_Interrupt();
+  //   Cp->request = CREATE;
+  //   Cp->code = f;
+  //   Cp->arg = arg;
+  //   Cp->py_arg = RR;
+  //   Cp->period_arg = 0;
+  //   Cp->wcet_arg = 0;
+  //   Cp->offset_arg = 0;
+
+  //   PORTL = (1 << KERNEL_DEBUG_PIN);
+  //   Enter_Kernel();
+  // }
+  // else
+  // {
+  //   /* call the RTOS function directly */
+  //   Kernel_Create_Task(f, arg, RR, 0, 0, 0);
+  // }
+  // // #TODO this is a hack to return the PID. If an interrupt happens at
+  // // a bad time this could be wrong in theory..... IDK how to fix. API spec is weird
+  // return Tasks;
+  return Task_Create_WRR(f, arg, 1);
+}
+
+PID Task_Create_Period(voidfuncptr f, int arg, TICK period, TICK wcet, TICK offset)
+{
+  if (KernelActive)
+  {
+    Disable_Interrupt();
+    Cp->request = CREATE;
     Cp->code = f;
     Cp->arg = arg;
     Cp->py_arg = TIME;
@@ -766,88 +840,93 @@ PID Task_Create_Period(void_func_ptr f, int arg, TICK period, TICK wcet, TICK of
     Cp->period_arg = period;
     Cp->wcet_arg = wcet;
     Cp->offset_arg = offset;
-    Cp->w = 0;
-
-    PORTL = (1<<KERNEL_DEBUG_PIN);
+    PORTL = (1 << KERNEL_DEBUG_PIN);
     Enter_Kernel();
-  } else {
-     /* call the RTOS function directly */
-     Kernel_Create_Task( f, arg, TIME, period, wcet, offset, 0);
+  }
+  else
+  {
+    /* call the RTOS function directly */
+    Kernel_Create_Task(f, arg, TIME, period, wcet, offset, 1);
   }
   return Cp->pid;
 }
 
-PID Task_Create_System(void_func_ptr f, int arg)
+PID Task_Create_System(voidfuncptr f, int arg)
 {
-  if (KernelActive ) {
+  if (KernelActive)
+  {
     Disable_Interrupt();
-    Cp ->request = CREATE;
+    Cp->request = CREATE;
     Cp->code = f;
     Cp->arg = arg;
     Cp->py_arg = SYSTEM;
     Cp->period_arg = 0;
     Cp->wcet_arg = 0;
     Cp->offset_arg = 0;
-    Cp->w = 0;
-
-    PORTL = (1<<KERNEL_DEBUG_PIN);
+    PORTL = (1 << KERNEL_DEBUG_PIN);
     Enter_Kernel();
-  } else {
-     /* call the RTOS function directly */
-     Kernel_Create_Task( f, arg, SYSTEM, 0, 0, 0, 0);
+  }
+  else
+  {
+    /* call the RTOS function directly */
+    Kernel_Create_Task(f, arg, SYSTEM, 0, 0, 0, 1);
   }
   return Cp->pid;
 }
 
-PID Task_Create_Idle(void_func_ptr f, int arg)
+PID Task_Create_Idle(voidfuncptr f, int arg)
 {
-   if (KernelActive ) {
-     Disable_Interrupt();
-     Cp ->request = CREATE;
-     Cp->code = f;
-     Cp->arg = arg;
-     Cp->py = IDLE_TASK;
-     Cp->period = 0;
-     Cp->wcet = 0;
-     Cp->offset = 0;
-     Cp->w = 0;
+  if (KernelActive)
+  {
+    Disable_Interrupt();
+    Cp->request = CREATE;
+    Cp->code = f;
+    Cp->arg = arg;
+    Cp->py = IDLE_TASK;
+    Cp->period = 0;
+    Cp->wcet = 0;
+    Cp->offset = 0;
 
-     PORTL = (1<<KERNEL_DEBUG_PIN);
-     Enter_Kernel();
-   } else {
-      /* call the RTOS function directly */
-      Kernel_Create_Task( f, arg, IDLE_TASK, 0, 0, 0, 0);
-   }
-   return Cp->pid;
+    PORTL = (1 << KERNEL_DEBUG_PIN);
+    Enter_Kernel();
+  }
+  else
+  {
+    /* call the RTOS function directly */
+    Kernel_Create_Task(f, arg, IDLE_TASK, 0, 0, 0, 1);
+  }
+  return Cp->pid;
 }
 
 /**
-  * Interrupt signaled task switch.
+  * The calling task gives up its share of the processor voluntarily.
   */
-void Task_Interrupted_Next()
+void Task_Next_2()
 {
-   if (KernelActive) {
-     Disable_Interrupt();
-     Cp ->request = NEXT;
-     PORTL = (1<<KERNEL_DEBUG_PIN);
-     Enter_Kernel();
+  if (KernelActive)
+  {
+    Disable_Interrupt();
+    Cp->request = NEXT;
+    PORTL = (1 << KERNEL_DEBUG_PIN);
+    Enter_Kernel();
   }
 }
 
-/**
- * Task voluntarily gives up processor time.
- */
 void Task_Next()
 {
-  if (KernelActive) {
-    if(Cp->py != TIME){
-        Task_Interrupted_Next();
-    }else{
+  if (KernelActive)
+  {
+    if (Cp->py != TIME)
+    {
+      Task_Next_2();
+    }
+    else
+    {
       // Here we handle the edge case of a Time based task giving up the
       // processor voluntarily. It should suspend itself
       Disable_Interrupt();
-      Cp ->request = NEXT_TIME;
-      PORTL = (1<<KERNEL_DEBUG_PIN);
+      Cp->request = NEXT_TIME;
+      PORTL = (1 << KERNEL_DEBUG_PIN);
       Enter_Kernel();
     }
   }
@@ -856,24 +935,24 @@ void Task_Next()
 /**
   * The calling task gets its initial "argument" when it was created.
   */
-int  Task_GetArg(void)
+int Task_GetArg(void)
 {
-	return Cp->arg;
+  return Cp->arg;
 }
-
 
 /**
   * The calling task terminates itself.
   */
 void Task_Terminate()
 {
-   if (KernelActive) {
-      Disable_Interrupt();
-      Cp -> request = TERMINATE;
-      PORTL = (1<<KERNEL_DEBUG_PIN);
-      Enter_Kernel();
-     /* never returns here! */
-   }
+  if (KernelActive)
+  {
+    Disable_Interrupt();
+    Cp->request = TERMINATE;
+    PORTL = (1 << KERNEL_DEBUG_PIN);
+    Enter_Kernel();
+    /* never returns here! */
+  }
 }
 
 /**
@@ -882,60 +961,64 @@ void Task_Terminate()
   */
 CHAN Chan_Init()
 {
-	if (KernelActive) {
-		Disable_Interrupt();
-		Cp ->request = CHAN_INIT;
-		PORTL = (1<<KERNEL_DEBUG_PIN);
-		Enter_Kernel();
-		return Cp->kernel_response;
-	}
-	return NULL;
+  if (KernelActive)
+  {
+    Disable_Interrupt();
+    Cp->request = CHAN_INIT;
+    PORTL = (1 << KERNEL_DEBUG_PIN);
+    Enter_Kernel();
+    return Cp->kernel_response;
+  }
+  return NULL;
 }
 
 /**
   * blocking send on CHAN
   */
-void Send( CHAN ch, int v )
+void Send(CHAN ch, int v)
 {
-	if (KernelActive) {
-		Disable_Interrupt();
-		Cp->request = CHAN_SEND;
-		Cp->comm_chan = ch;
-		Cp->kernel_chan_arg = v;
-		PORTL = (1<<KERNEL_DEBUG_PIN);
-		Enter_Kernel();
-	}
+  if (KernelActive)
+  {
+    Disable_Interrupt();
+    Cp->request = CHAN_SEND;
+    Cp->comm_chan = ch;
+    Cp->kernel_chan_arg = v;
+    PORTL = (1 << KERNEL_DEBUG_PIN);
+    Enter_Kernel();
+  }
 }
 
 /**
   * blocking receive on CHAN
   */
-int Recv( CHAN ch )
+int Recv(CHAN ch)
 {
-	if (KernelActive) {
-		Disable_Interrupt();
-		Cp->request = CHAN_RECV;
-		Cp->comm_chan = ch;
-		PORTL = (1<<KERNEL_DEBUG_PIN);
-		Enter_Kernel();
-		return Cp->kernel_response;
-	}
-	return (-1);
+  if (KernelActive)
+  {
+    Disable_Interrupt();
+    Cp->request = CHAN_RECV;
+    Cp->comm_chan = ch;
+    PORTL = (1 << KERNEL_DEBUG_PIN);
+    Enter_Kernel();
+    return Cp->kernel_response;
+  }
+  return (-1);
 }
 
 /**
   * non-blocking send on CHAN
   */
-void Write( CHAN ch, int v )
+void Write(CHAN ch, int v)
 {
-	if (KernelActive) {
-		Disable_Interrupt();
-		Cp ->request = CHAN_WRITE;
-		Cp->comm_chan = ch;
-		Cp->kernel_chan_arg = v;
-		PORTL = (1<<KERNEL_DEBUG_PIN);
-		Enter_Kernel();
-	}
+  if (KernelActive)
+  {
+    Disable_Interrupt();
+    Cp->request = CHAN_WRITE;
+    Cp->comm_chan = ch;
+    Cp->kernel_chan_arg = v;
+    PORTL = (1 << KERNEL_DEBUG_PIN);
+    Enter_Kernel();
+  }
 }
 
 /**
@@ -946,11 +1029,10 @@ void Write( CHAN ch, int v )
   */
 unsigned int Now()
 {
-	unsigned int temp_time = TCNT3;
-	unsigned int time = (10 * current_tick) + (temp_time / 2000);
-	return time;
+  unsigned int temp_time = TCNT3;
+  unsigned int time = (10 * current_tick) + (temp_time / 2000);
+  return time;
 }
-
 
 /*============
   * A Simple Test
@@ -963,17 +1045,16 @@ void Timer_Init()
   TCCR3A = 0;
   TCCR3B = 0;
   //Set to CTC (mode 4)
-  TCCR3B |= (1<<WGM32);
+  TCCR3B |= (1 << WGM32);
 
   //Set prescaller to 1/8
-  TCCR3B |= (1<<CS30);
-  TCCR3B |= (1<<CS31);
+  TCCR3B |= (1 << CS31);
 
   //Set TOP value 0.0001s*MSECPERTICK
-  OCR3A = 2000*MSECPERTICK;
+  OCR3A = 2000 * MSECPERTICK;
 
   //Enable interupt A for timer 3.
-  TIMSK3 |= (1<<OCIE3A);
+  TIMSK3 |= (1 << OCIE3A);
 
   //Set timer to 0 (optional here).
   TCNT3 = 0;
@@ -987,10 +1068,13 @@ void Kernel_Tick()
   current_tick++;
   int x;
   int ready_time_tasks = 0;
-  for (x = 0; x < MAXPROCESS; x++) {
-    if (Process[x].py == TIME && Process[x].state != SUSPENDED){
+  for (x = 0; x < MAXPROCESS; x++)
+  {
+    if (Process[x].py == TIME && Process[x].state != SUSPENDED)
+    {
       Process[x].executed_ticks++;
-      if (Process[x].executed_ticks >= Process[x].wcet){
+      if (Process[x].executed_ticks >= Process[x].wcet)
+      {
         OS_Abort(ERROR_WCET_VIOLATION);
       }
     }
@@ -1014,24 +1098,38 @@ void Kernel_Tick()
   //     OS_Abort(ERROR_WCET_VIOLATION);
   //   }
   // }
-
 }
 
 // This ISR fires every MSECPERTICKms and represents our RTOS tick
 ISR(TIMER3_COMPA_vect)
 {
   Kernel_Tick();
-  if (Cp->py >= RR)
+  CurrentTaskTicks++;
+
+  if (Cp->py == RR)
   {
-      Task_Interrupted_Next();
+    // If the RTOS has been running this task for as many ticks as its weight,
+    // Then reset the ticks counter and switch to the next task
+    // Otherwise just continue until the next tick
+    if (Cp->w <= CurrentTaskTicks)
+    {
+      CurrentTaskTicks = 0;
+      Task_Next_2();
+    }
+    return;
+  }
+
+  if (Cp->py > RR)
+  {
+    Task_Next_2();
   }
 }
 
 void Init_Debug_LEDs()
 {
-  DDRL |= (1<<PL2);
-  DDRL |= (1<<PL3);
-  DDRL |= (1<<PL4);
+  DDRL |= (1 << PL2);
+  DDRL |= (1 << PL3);
+  DDRL |= (1 << PL4);
   DDRC = 0xFF;
   // DDRA |= (1<<PA0);
   // DDRA |= (1<<PA1);
@@ -1046,7 +1144,9 @@ void Init_Debug_LEDs()
 
 void Idle_Task()
 {
-  for(;;){}
+  for (;;)
+  {
+  }
 }
 
 /**
@@ -1054,13 +1154,13 @@ void Idle_Task()
   */
 int main()
 {
-   OS_Init();
-   Init_Debug_LEDs();
-   // Here we create a task for a_main which should be defined externally to create
-   // all tasks needed for the application, and then terminate.
-   // #TODO this should be created as a system task once we implement this functionality
-   Task_Create_Idle(Idle_Task, 0);
-   Task_Create_System( a_main , PL2);
-   Timer_Init();
-   OS_Start();
+  OS_Init();
+  Init_Debug_LEDs();
+  // Here we create a task for a_main which should be defined externally to create
+  // all tasks needed for the application, and then terminate.
+  // #TODO this should be created as a system task once we implement this functionality
+  Task_Create_Idle(Idle_Task, 0);
+  Task_Create_System(a_main, PL2);
+  Timer_Init();
+  OS_Start();
 }
