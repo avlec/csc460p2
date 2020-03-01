@@ -32,7 +32,7 @@ set(CMAKE_CXX_COMPILER ${AVRCPP})
 set(CMAKE_C_COMPILER ${AVRC})
 set(CMAKE_ASM_COMPILER ${AVRC})
 
-project(cswitchexample C ASM)
+project(os C ASM)
 
 set(BASE_PATH "${${PROJECT_NAME}_SOURCE_DIR}")
 
@@ -51,9 +51,6 @@ set(CXXFLAGS "${CMCU} ${CDEBUG} ${CDEFS} ${COPT} ${CTUNING}")
 set(CMAKE_C_FLAGS   "${CFLAGS}")
 set(CMAKE_CXX_FLAGS "${CXXFLAGS}")
 set(CMAKE_ASM_FLAGS   "${CFLAGS}")
-
-# Voluntary switching toggle.
-add_definitions(-DVOLUNTARY)
 
 # Project setup
 add_executable(${PROJECT_NAME} tests/Test_WRR.c blink/blink.c blink/blink.h cswitch.s os.c os.h)
